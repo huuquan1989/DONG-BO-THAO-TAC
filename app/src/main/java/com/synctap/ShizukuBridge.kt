@@ -10,6 +10,7 @@ import kotlin.concurrent.thread
 object ShizukuBridge {
     private var proc: Process? = null
     private var writer: OutputStreamWriter? = null
+    @Volatile private var up = false          // Injector còn chạy (tự theo dõi, không gọi Process.isAlive)
 
     @Volatile var devPath: String? = null
     @Volatile var maxX = 0
@@ -37,17 +38,19 @@ object ShizukuBridge {
 
     @Synchronized
     fun startInjector(ctx: Context): Boolean {
-        if (proc?.isAlive == true) return true
+        if (up && proc != null) return true
         val apk = ctx.applicationInfo.sourceDir
         val p = newProcess(arrayOf("sh", "-c", "CLASSPATH='$apk' exec app_process /system/bin com.synctap.Injector"))
             ?: return false
         proc = p
+        up = true
         writer = OutputStreamWriter(p.outputStream)
         Logger.d("SHZ", "Injector khoi dong, apk=$apk")
         thread(isDaemon = true) {
             try {
                 p.inputStream.bufferedReader().forEachLine { handleLine(it) }
             } catch (_: Throwable) {}
+            if (proc === p) up = false
             Logger.d("SHZ", "Injector stdout dong")
         }
         thread(isDaemon = true) {
@@ -85,7 +88,7 @@ object ShizukuBridge {
     fun stop() {
         send("STOP")
         val old = proc
-        proc = null; writer = null
+        proc = null; writer = null; up = false
         thread(isDaemon = true) {
             Thread.sleep(1500)
             try { old?.destroy() } catch (_: Throwable) {}

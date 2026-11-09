@@ -39,7 +39,15 @@ class MainActivity : Activity() {
     }
 
     private fun btn(root: LinearLayout, t: String, onClick: () -> Unit): Button {
-        val b = Button(this).apply { text = t; setOnClickListener { onClick() } }
+        val b = Button(this).apply {
+            text = t
+            setOnClickListener {
+                try { onClick() } catch (e: Throwable) {
+                    Logger.d("UI", "loi nut '$t': " + android.util.Log.getStackTraceString(e))
+                    showLog()
+                }
+            }
+        }
         root.addView(b)
         return b
     }

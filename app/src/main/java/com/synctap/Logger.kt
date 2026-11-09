@@ -14,9 +14,19 @@ object Logger {
     private const val MAX = 150_000
     private const val KEEP = 80_000
 
+    private var crashHook = false
+
     @Synchronized
     fun init(ctx: Context) {
         if (file == null) file = File(ctx.applicationContext.filesDir, "synctap.log")
+        if (!crashHook) {
+            crashHook = true
+            val prev = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { t, e ->
+                d("CRASH", "luong ${t.name}: " + Log.getStackTraceString(e))
+                prev?.uncaughtException(t, e)
+            }
+        }
     }
 
     @Synchronized
