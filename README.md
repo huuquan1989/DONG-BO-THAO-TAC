@@ -28,6 +28,8 @@
    - **GHI RỒI PHÁT**: ổn định, cửa sổ kia chạm sau khi bạn nhấc tay.
    - **SHIZUKU**: ngón tay chạm thẳng vào game; một tiến trình quyền shell (chạy qua Shizuku) đọc cảm ứng thật từ `/dev/input` và bơm bản sao sang các vùng khác theo thời gian thực. Cần cài app Shizuku, khởi động qua gỡ lỗi không dây và cấp quyền cho SyncTap. Xiaomi/MIUI cần bật "Gỡ lỗi USB (Cài đặt bảo mật)".
    - Kiểm tra Shizuku bằng các nút 1 đến 3 ngay trong app trước khi dùng.
+   - Android 13 chỉ cho một thiết bị cảm ứng chạm tại một thời điểm trên mỗi màn hình (bơm cảm ứng từ thiết bị khác sẽ huỷ ngón tay thật). Vì thế chế độ SHIZUKU **độc chiếm** màn cảm ứng (EVIOCGRAB) rồi tự bơm lại cả ngón tay thật lẫn bản sao.
+   - **Thoát khẩn cấp:** bấm tăng âm lượng 3 lần trong 3 giây, hoặc tắt SYNC. Tiến trình thoát thì cảm ứng trở lại bình thường.
 
 ## Giới hạn hiện tại
 - `dispatchGesture` huỷ mọi cử chỉ đang diễn ra, kể cả ngón tay thật, nên không thể vừa chạm thật vừa phát cử chỉ giả qua lớp phủ. Vì vậy chế độ SHIZUKU không dùng `dispatchGesture`.

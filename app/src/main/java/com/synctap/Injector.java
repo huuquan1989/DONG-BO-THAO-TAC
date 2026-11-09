@@ -32,6 +32,8 @@ public class Injector {
     private static final LinkedHashMap<Integer, float[]> inj = new LinkedHashMap<>();
     private static long injDownTime = 0;
     private static int errCount = 0;
+    private static int failStreak = 0;
+    private static int touchDeviceId = -1;
 
     private static volatile boolean running = false;
     private static float[][] zones = new float[0][];
@@ -192,15 +194,22 @@ public class Injector {
         }
         long now = SystemClock.uptimeMillis();
         MotionEvent ev = MotionEvent.obtain(injDownTime, now, act, n, pp, pc, 0, 0, 1f, 1f,
-                -1, 0, InputDevice.SOURCE_TOUCHSCREEN, 0);
+                touchDeviceId, 0, InputDevice.SOURCE_TOUCHSCREEN, 0);
+        boolean ok = false;
         try {
             if (setDisplayId != null) setDisplayId.invoke(ev, 0);
-            injectMethod.invoke(inputManager, ev, 0);
+            Object r = injectMethod.invoke(inputManager, ev, 0);
+            ok = !(r instanceof Boolean) || ((Boolean) r);
         } catch (Throwable t) {
             Throwable c = t.getCause() != null ? t.getCause() : t;
             if (errCount++ < 5) log("inject loi: " + c);
         }
         ev.recycle();
+        if (ok) {
+            failStreak = 0;
+        } else if (running && ++failStreak >= 5) {
+            emergency("bom cam ung that bai lien tuc");
+        }
     }
 
     private static void syncInjected(Map<Integer, float[]> target) {
@@ -238,6 +247,108 @@ public class Injector {
         }
     }
 
+    /** Thoát khẩn cấp: tiến trình chết thì kernel tự nhả quyền độc chiếm màn cảm ứng. */
+    private static void emergency(String why) {
+        log("KHAN CAP: " + why + " -> tha man cam ung va thoat");
+        System.exit(2);
+    }
+
+    private static boolean grab(java.io.FileDescriptor fd) {
+        try {
+            Class<?> lc = Class.forName("libcore.io.Libcore");
+            Object os = lc.getField("os").get(null);
+            Method m = null;
+            for (Method mm : os.getClass().getMethods()) {
+                if (mm.getName().equals("ioctlInt")) { m = mm; break; }
+            }
+            if (m == null) { log("khong co ioctlInt"); return false; }
+            int EVIOCGRAB = 0x40044590;
+            if (m.getParameterTypes().length == 2) {
+                m.invoke(os, fd, EVIOCGRAB);
+            } else {
+                Object ref = Class.forName("android.system.Int32Ref").getConstructor(int.class).newInstance(1);
+                m.invoke(os, fd, EVIOCGRAB, ref);
+            }
+            log("EVIOCGRAB ok");
+            return true;
+        } catch (Throwable t) {
+            Throwable c = t.getCause() != null ? t.getCause() : t;
+            log("grab loi: " + c);
+            return false;
+        }
+    }
+
+    private static int findTouchDeviceId() {
+        try {
+            int[] ids = InputDevice.getDeviceIds();
+            for (int id : ids) {
+                InputDevice d = InputDevice.getDevice(id);
+                if (d == null || d.isVirtual()) continue;
+                if ((d.getSources() & InputDevice.SOURCE_TOUCHSCREEN) == InputDevice.SOURCE_TOUCHSCREEN) {
+                    log("touch device id=" + id + " name=" + d.getName());
+                    return id;
+                }
+            }
+        } catch (Throwable t) {
+            log("findTouchDeviceId loi: " + t);
+        }
+        log("khong thay touch device, dung id -1");
+        return -1;
+    }
+
+    /** Bấm tăng âm lượng 3 lần trong 3 giây: thoát khẩn cấp, trả lại cảm ứng bình thường. */
+    private static void startKeyWatcher() {
+        try {
+            Process p = new ProcessBuilder("getevent", "-pl").redirectErrorStream(true).start();
+            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String dev = null, found = null, line;
+            while ((line = br.readLine()) != null) {
+                if (line.startsWith("add device")) {
+                    int i = line.indexOf("/dev/input/");
+                    dev = i >= 0 ? line.substring(i).trim() : null;
+                } else if (line.contains("KEY_VOLUMEUP") && dev != null && found == null) {
+                    found = dev;
+                }
+            }
+            if (found == null) { log("khong thay phim tang am luong"); return; }
+            final String keyPath = found;
+            log("phim thoat khan cap: 3 lan tang am luong (" + keyPath + ")");
+            new Thread(new Runnable() {
+                public void run() {
+                    int evSize = android.os.Process.is64Bit() ? 24 : 16;
+                    long[] t = new long[3];
+                    int n = 0;
+                    try (FileInputStream fis = new FileInputStream(keyPath)) {
+                        byte[] buf = new byte[evSize];
+                        ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN);
+                        while (true) {
+                            int got = 0;
+                            while (got < evSize) {
+                                int r = fis.read(buf, got, evSize - got);
+                                if (r < 0) return;
+                                got += r;
+                            }
+                            int off = evSize - 8;
+                            int type = bb.getShort(off) & 0xffff;
+                            int code = bb.getShort(off + 2) & 0xffff;
+                            int value = bb.getInt(off + 4);
+                            if (type == 1 && code == 115 && value == 1) {
+                                long now = SystemClock.uptimeMillis();
+                                t[n % 3] = now;
+                                n++;
+                                if (n >= 3 && now - t[n % 3] <= 3000) emergency("nguoi dung bam tang am luong 3 lan");
+                            }
+                        }
+                    } catch (Throwable e) {
+                        log("key watcher loi: " + e);
+                    }
+                }
+            }, "keywatch").start();
+        } catch (Throwable t) {
+            log("startKeyWatcher loi: " + t);
+        }
+    }
+
     private static void tap(float x, float y) throws Exception {
         LinkedHashMap<Integer, float[]> t = new LinkedHashMap<Integer, float[]>();
         t.put(0, new float[]{x, y});
@@ -264,6 +375,8 @@ public class Injector {
             log("da chay roi");
             return;
         }
+        touchDeviceId = findTouchDeviceId();
+        startKeyWatcher();
         running = true;
         log("START dev=" + path + " max=" + (int) maxX + "x" + (int) maxY + " screen=" + W + "x" + H
                 + " rot=" + rot + " zones=" + n);
@@ -276,8 +389,8 @@ public class Injector {
     }
 
     private static float[] toPx(int rawX, int rawY) {
-        float nx = maxX > 0 ? rawX / maxX : 0f;
-        float ny = maxY > 0 ? rawY / maxY : 0f;
+        float nx = rawX / (maxX + 1f);
+        float ny = rawY / (maxY + 1f);
         switch (rot) {
             case 1: return new float[]{ny * W, (1 - nx) * H};
             case 2: return new float[]{(1 - nx) * W, (1 - ny) * H};
@@ -298,6 +411,11 @@ public class Injector {
         int evSize = android.os.Process.is64Bit() ? 24 : 16;
         for (int i = 0; i < SLOTS; i++) srcZone[i] = -1;
         try (FileInputStream fis = new FileInputStream(path)) {
+            if (!grab(fis.getFD())) {
+                log("khong doc chiem duoc man cam ung -> dung phan chieu");
+                running = false;
+                return;
+            }
             byte[] buf = new byte[evSize];
             ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN);
             int frames = 0;
@@ -350,11 +468,14 @@ public class Injector {
                 srcZone[s] = findZone(p[0], p[1]);
                 newDown[s] = false;
             }
+            // ngón tay thật (đã độc chiếm cảm ứng nên phải tự bơm lại)
+            target.put(s, new float[]{p[0], p[1]});
             int sz = srcZone[s];
-            if (sz < 0 || s >= 4) continue;
+            if (sz < 0 || s >= 3) continue;
             float[] a = zones[sz];
             float aw = a[2] - a[0], ah = a[3] - a[1];
             if (aw <= 0 || ah <= 0) continue;
+            int rank = 0;
             for (int d = 0; d < zones.length; d++) {
                 if (d == sz) continue;
                 float[] z = zones[d];
@@ -362,7 +483,9 @@ public class Injector {
                 float y = z[1] + (p[1] - a[1]) / ah * (z[3] - z[1]);
                 x = Math.max(0, Math.min(W - 1, x));
                 y = Math.max(0, Math.min(H - 1, y));
-                target.put(s * 8 + d, new float[]{x, y});
+                int pid = 10 + s * 7 + rank;
+                if (pid <= 31) target.put(pid, new float[]{x, y});
+                rank++;
             }
         }
         syncInjected(target);
